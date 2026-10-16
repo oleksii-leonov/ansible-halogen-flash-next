@@ -31,15 +31,19 @@ inference server, not a machine needing IOMMU isolation or GPU passthrough.
 
 ## Set up the controller
 
-Python 3.12 or newer is required on the controller. Ubuntu may need
-`sudo apt install python3-venv` first.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) on the
+controller. The project uses Python 3.12–3.14; uv can download a compatible
+interpreter if needed.
 
 ```bash
 cd ~/code/ansible-halogen
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
+uv sync --locked
 cp inventory.example.yml inventory.yml
 ```
+
+uv manages `.venv` and installs the exact dependencies recorded in `uv.lock`.
+Commit both `pyproject.toml` and `uv.lock` when changing dependencies. The target
+servers use Ubuntu's system Python and do not need uv.
 
 Edit `inventory.yml`: replace `192.0.2.10` with the target's LAN IP and `inference`
 with its existing SSH user. Add more hosts to the `halogen` group as needed, each
@@ -52,7 +56,7 @@ when needed.
 Use the target's inventory alias after `--limit`; the example uses `halogen-1`.
 
 ```bash
-.venv/bin/ansible-playbook prepare.yml --limit halogen-1 --ask-become-pass
+uv run --locked ansible-playbook prepare.yml --limit halogen-1 --ask-become-pass
 ```
 
 This installs Podman and Tailscale, grants GPU access, configures memory locking
@@ -73,8 +77,8 @@ Complete the displayed sign-in link as a permitted tag owner. Each host must hav
 its own Tailscale identity, SSH host keys and machine ID. Then deploy and test:
 
 ```bash
-.venv/bin/ansible-playbook deploy.yml --limit halogen-1
-.venv/bin/ansible-playbook verify.yml --limit halogen-1
+uv run --locked ansible-playbook deploy.yml --limit halogen-1
+uv run --locked ansible-playbook verify.yml --limit halogen-1
 ```
 
 Deployment pulls the pinned image as the SSH user, downloads only the nine
@@ -122,11 +126,11 @@ upgrade may have to process their full prompts again. No rollback automation.
 ## Check changes
 
 ```bash
-.venv/bin/python -m unittest discover -s tests -v
-.venv/bin/ansible-playbook -i inventory.example.yml prepare.yml --syntax-check
-.venv/bin/ansible-playbook -i inventory.example.yml deploy.yml --syntax-check
-.venv/bin/ansible-playbook -i inventory.example.yml verify.yml --syntax-check
-.venv/bin/ansible-playbook deploy.yml --limit halogen-1 --check --diff
+uv run --locked python -m unittest discover -s tests -v
+uv run --locked ansible-playbook -i inventory.example.yml prepare.yml --syntax-check
+uv run --locked ansible-playbook -i inventory.example.yml deploy.yml --syntax-check
+uv run --locked ansible-playbook -i inventory.example.yml verify.yml --syntax-check
+uv run --locked ansible-playbook deploy.yml --limit halogen-1 --check --diff
 ```
 
 The deployment check/diff is for a **prepared, enrolled host**. It queries runtime
