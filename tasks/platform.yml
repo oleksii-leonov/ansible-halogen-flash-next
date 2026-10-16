@@ -1,0 +1,15 @@
+---
+- name: Require the supported platform and a normal SSH login user
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.distribution == 'Ubuntu'
+      - ansible_facts.distribution_version == '26.04'
+      - ansible_facts.architecture == 'x86_64'
+      - ansible_facts.system_vendor == 'Framework'
+      - "'Desktop' in ansible_facts.product_name"
+      - ansible_facts.memtotal_mb >= 122880
+      - ansible_facts.user_uid != 0
+      - ansible_facts.user_id is match('^[a-z_][a-z0-9_-]*$')
+    fail_msg: >-
+      Use native Ubuntu 26.04 on a 128 GB Framework Desktop, with the BIOS UMA
+      frame buffer at its minimum, and connect as the existing non-root sudo user.

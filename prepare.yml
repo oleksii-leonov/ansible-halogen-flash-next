@@ -1,0 +1,148 @@
+---
+- name: Prepare a Framework Desktop for rootless Halogen
+  hosts: halogen
+  gather_facts: true
+  pre_tasks:
+    - name: Check the platform
+      ansible.builtin.import_tasks: tasks/platform.yml
+
+  tasks:
+    - name: Configure the host
+      become: true
+      block:
+        - name: Install Ubuntu runtime and GPU support packages
+          ansible.builtin.apt:
+            name:
+              - podman
+              - crun
+              - uidmap
+              - passt
+              - dbus-user-session
+              - ca-certificates
+              - pciutils
+              - linux-generic
+              - linux-firmware
+              - avahi-daemon
+            state: present
+            update_cache: true
+            cache_valid_time: 3600
+
+        - name: Confirm the Strix Halo GPU before changing boot settings
+          ansible.builtin.command: lspci -n -d 1002:1586
+          register: host_gpu
+          changed_when: false
+          check_mode: false
+
+        - name: Require the supported GPU family
+          ansible.builtin.assert:
+            that: host_gpu.stdout | length > 0
+            fail_msg: This boot configuration is only for AMD Strix Halo (1002:1586).
+
+        - name: Install the official Tailscale signing key
+          ansible.builtin.get_url:
+            url: https://pkgs.tailscale.com/stable/ubuntu/resolute.noarmor.gpg
+            dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
+            mode: "0644"
+
+        - name: Configure the official Tailscale stable repository
+          ansible.builtin.copy:
+            dest: /etc/apt/sources.list.d/tailscale.list
+            content: "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu resolute main\n"
+            mode: "0644"
+          register: tailscale_repo
+
+        - name: Install Tailscale
+          ansible.builtin.apt:
+            name: tailscale
+            state: present
+            update_cache: "{{ tailscale_repo.changed }}"
+
+        - name: Start networking services at boot
+          ansible.builtin.systemd_service:
+            name: "{{ item }}"
+            enabled: true
+            state: started
+          loop:
+            - tailscaled.service
+            - avahi-daemon.service
+
+        - name: Give the SSH user access to the GPU
+          ansible.builtin.user:
+            name: "{{ ansible_facts.user_id }}"
+            groups: [video, render]
+            append: true
+          register: gpu_groups
+
+        - name: Set login memory-lock limits
+          ansible.builtin.copy:
+            dest: /etc/security/limits.d/halogen.conf
+            content: |
+              {{ ansible_facts.user_id }} hard memlock unlimited
+              {{ ansible_facts.user_id }} soft memlock unlimited
+            mode: "0644"
+          register: login_memlock
+
+        - name: Create the user's system manager override directory
+          ansible.builtin.file:
+            path: "/etc/systemd/system/user@{{ ansible_facts.user_uid }}.service.d"
+            state: directory
+            mode: "0755"
+
+        - name: Allow the user's systemd manager to lock model memory
+          ansible.builtin.copy:
+            dest: "/etc/systemd/system/user@{{ ansible_facts.user_uid }}.service.d/memlock.conf"
+            content: |
+              [Service]
+              LimitMEMLOCK=infinity
+            mode: "0644"
+          register: manager_memlock
+
+        - name: Enable the user manager at boot without an interactive login
+          ansible.builtin.command:
+            argv: [loginctl, enable-linger, "{{ ansible_facts.user_id }}"]
+            creates: "/var/lib/systemd/linger/{{ ansible_facts.user_id }}"
+
+        - name: Create the GRUB drop-in directory
+          ansible.builtin.file:
+            path: /etc/default/grub.d
+            state: directory
+            mode: "0755"
+
+        - name: Install the GPU boot settings
+          ansible.builtin.copy:
+            src: files/99-halogen.cfg
+            dest: /etc/default/grub.d/99-halogen.cfg
+            mode: "0644"
+          register: grub_config
+
+        - name: Regenerate GRUB after changing its configuration
+          ansible.builtin.command: update-grub
+          when: grub_config.changed
+          changed_when: true
+
+        - name: Read the current kernel arguments
+          ansible.builtin.slurp:
+            src: /proc/cmdline
+          register: kernel_cmdline
+
+        - name: Check whether Ubuntu requires a reboot
+          ansible.builtin.stat:
+            path: /var/run/reboot-required
+          register: reboot_required
+
+        - name: Reboot to apply GPU settings, group membership and manager limits
+          ansible.builtin.reboot:
+            reboot_timeout: 600
+          when: >-
+            gpu_groups.changed or login_memlock.changed or manager_memlock.changed
+            or reboot_required.stat.exists
+            or 'amd_iommu=off' not in (kernel_cmdline.content | b64decode).split()
+            or 'amdgpu.gttsize=126976' not in (kernel_cmdline.content | b64decode).split()
+            or 'ttm.pages_limit=32505856' not in (kernel_cmdline.content | b64decode).split()
+
+    - name: Explain the one-time Tailscale enrollment step
+      ansible.builtin.debug:
+        msg: >-
+          If this host is not enrolled yet, SSH to it and run
+          sudo tailscale login --advertise-tags=tag:server.
+          Define tag:server in your tailnet policy first. Then run deploy.yml.

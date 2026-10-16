@@ -1,0 +1,14 @@
+---
+- name: Verify Halogen with synthetic requests
+  hosts: halogen
+  gather_facts: true
+  tasks:
+    - name: Check health and the configured capacity
+      ansible.builtin.import_tasks: tasks/health.yml
+
+    - name: Check streaming, tools, concurrency and vision
+      ansible.builtin.script:
+        cmd: "tests/smoke.py http://{{ halogen_lan_ip | default(ansible_facts.default_ipv4.address) }}:8731"
+        executable: python3
+      changed_when: false
+      when: not ansible_check_mode

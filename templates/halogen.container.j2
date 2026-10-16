@@ -1,0 +1,39 @@
+[Unit]
+Description=halogen-flash-server
+
+[Container]
+Image={{ halogen_image }}
+{% for address in halogen_bind_addresses %}
+PublishPort={{ address }}:8731:8731
+{% endfor %}
+AddDevice=/dev/kfd
+AddDevice=/dev/dri
+GroupAdd=keep-groups
+PodmanArgs=--ipc=host --ulimit memlock=-1:-1
+Volume=%h/halogen-models:/models:ro
+Volume=%h/halogen-cache:/cache
+StopTimeout=60
+
+# Three full 262k conversations resident, vision on.
+Environment=HALOGEN_KV_POOL_POSITIONS=786432
+Environment=HALOGEN_VISION_TOWER=1
+Environment=HALOGEN_WEIGHTS_LOCK=1
+
+Environment=HALOGEN_MAX_TOKENS_DEFAULT=32768
+Environment=HALOGEN_MAX_THINKING_TOKENS=16384
+Environment=HALOGEN_TEMPERATURE=1.0
+Environment=HALOGEN_TOP_P=0.95
+Environment=HALOGEN_TOP_K=20
+
+Environment=HALOGEN_CACHE_DIR=/cache
+Environment=HALOGEN_CACHE_PRUNE_OLD=1
+
+[Service]
+LimitMEMLOCK=infinity
+TimeoutStartSec=900
+TimeoutStopSec=90
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

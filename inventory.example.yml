@@ -1,0 +1,11 @@
+all:
+  children:
+    halogen:
+      hosts:
+        halogen-1:
+          # Replace this documentation address with the target machine's LAN IP.
+          ansible_host: 192.0.2.10
+          # Replace with an existing non-root user with sudo access.
+          ansible_user: inference
+          # Reserve this address in DHCP; the service binds to this exact IP.
+          halogen_lan_ip: 192.0.2.10

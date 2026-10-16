@@ -1,0 +1,237 @@
+---
+- name: Deploy the pinned Halogen image and model as the SSH user
+  hosts: halogen
+  gather_facts: true
+  pre_tasks:
+    - name: Check the platform
+      ansible.builtin.import_tasks: tasks/platform.yml
+
+    - name: Confirm Strix Halo hardware
+      ansible.builtin.command: lspci -n -d 1002:1586
+      register: gpu
+      changed_when: false
+      check_mode: false
+
+    - name: Read the running kernel's SVM configuration
+      ansible.builtin.slurp:
+        src: "/boot/config-{{ ansible_facts.kernel }}"
+      register: kernel_config
+
+    - name: Check user GPU access and login memory-lock limit
+      ansible.builtin.shell: |
+        set -e
+        test -r /dev/kfd
+        test -w /dev/kfd
+        test -r /dev/dri/renderD128
+        test -w /dev/dri/renderD128
+        test "$(ulimit -H -l)" = unlimited
+        test "$(systemctl show user@{{ ansible_facts.user_uid }}.service --property=LimitMEMLOCK --value)" = infinity
+        test -e /var/lib/systemd/linger/{{ ansible_facts.user_id }}
+      args:
+        executable: /bin/bash
+      changed_when: false
+      check_mode: false
+
+    - name: Read Podman's runtime configuration
+      ansible.builtin.command: podman info --format json
+      register: podman_info
+      changed_when: false
+      check_mode: false
+
+    - name: Require the prepared host runtime
+      ansible.builtin.assert:
+        that:
+          - gpu.stdout | length > 0
+          - "'CONFIG_HSA_AMD_SVM=y' in (kernel_config.content | b64decode).splitlines()"
+          - (podman_info.stdout | from_json).host.security.rootless
+          - (podman_info.stdout | from_json).host.cgroupVersion == 'v2'
+          - (podman_info.stdout | from_json).host.ociRuntime.name == 'crun'
+          - (podman_info.stdout | from_json).version.Version is version('5.7', '>=')
+          - (podman_info.stdout | from_json).host.idMappings.uidmap | length >= 2
+          - (podman_info.stdout | from_json).host.idMappings.gidmap | length >= 2
+          - ansible_facts.cmdline.get('amd_iommu') == 'off'
+          - ansible_facts.cmdline.get('amdgpu.gttsize') == '126976'
+          - ansible_facts.cmdline.get('ttm.pages_limit') == '32505856'
+        fail_msg: Run prepare.yml first, including its reboot, and reconnect via SSH.
+
+    - name: Read this machine's Tailscale identity
+      ansible.builtin.command: tailscale status --json
+      register: tailscale_status
+      changed_when: false
+      check_mode: false
+
+    - name: Require Tailscale enrollment with the server tag
+      ansible.builtin.assert:
+        that:
+          - (tailscale_status.stdout | from_json).BackendState == 'Running'
+          - "'tag:server' in (tailscale_status.stdout | from_json).Self.get('Tags', [])"
+        fail_msg: Run sudo tailscale login --advertise-tags=tag:server on this host first.
+
+    - name: Discover the Tailscale IPv4 address
+      ansible.builtin.command: tailscale ip -4
+      register: tailscale_ip
+      changed_when: false
+      check_mode: false
+
+    - name: Select this host's two listening addresses
+      ansible.builtin.set_fact:
+        halogen_bind_addresses:
+          - "{{ tailscale_ip.stdout | trim }}"
+          - "{{ halogen_lan_ip | default(ansible_facts.default_ipv4.address) }}"
+
+    - name: Require assigned, distinct IPv4 addresses
+      ansible.builtin.assert:
+        that:
+          - halogen_bind_addresses | unique | length == 2
+          - halogen_bind_addresses | difference(ansible_facts.all_ipv4_addresses) | length == 0
+
+  tasks:
+    - name: Check for active requests before changing a running installation
+      ansible.builtin.uri:
+        url: "http://{{ halogen_bind_addresses[1] }}:8731/health"
+        return_content: true
+        use_proxy: false
+        timeout: 10
+      register: previous_health
+      failed_when: false
+      check_mode: false
+
+    - name: Leave a busy service running
+      ansible.builtin.assert:
+        that:
+          - not (previous_health.json | default({})).get('busy', false)
+          - (previous_health.json | default({})).get('in_flight', 0) == 0
+          - (previous_health.json | default({})).get('queued', 0) == 0
+        fail_msg: Stop client traffic and rerun when Halogen is idle.
+
+    - name: Create user-owned service and data directories
+      ansible.builtin.file:
+        path: "{{ ansible_facts.user_dir }}/{{ item }}"
+        state: directory
+        mode: "0700"
+      loop: [.config/containers/systemd, halogen-models, halogen-cache]
+
+    - name: Check whether the pinned image is already present
+      ansible.builtin.command:
+        argv: [podman, image, exists, "{{ halogen_image }}"]
+      register: image_exists
+      changed_when: false
+      failed_when: image_exists.rc not in [0, 1]
+      check_mode: false
+
+    - name: Pull the pinned image
+      ansible.builtin.command:
+        argv: [podman, pull, "{{ halogen_image }}"]
+      when: image_exists.rc == 1 and not ansible_check_mode
+      changed_when: true
+
+    - name: Check downloaded model file sizes without reading the weights
+      ansible.builtin.stat:
+        path: "{{ ansible_facts.user_dir }}/halogen-models/{{ item.name }}"
+        get_checksum: false
+        get_mime: false
+      loop: "{{ halogen_model_files }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: model_files
+
+    - name: Read the installed model revision marker if present
+      ansible.builtin.command:
+        argv: [cat, "{{ ansible_facts.user_dir }}/halogen-models/.halogen-model-revision"]
+      register: model_revision
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Decide whether the pinned model needs downloading
+      ansible.builtin.set_fact:
+        download_models: >-
+          {{ model_revision.stdout | trim != halogen_model_revision
+          or (model_files.results | map(attribute='stat.size', default=0) | list)
+          != (halogen_model_files | map(attribute='size') | list) }}
+
+    - name: Download weights before starting the server
+      when: download_models and not ansible_check_mode
+      block:
+        - name: Check available space on the model filesystem
+          ansible.builtin.command:
+            argv: [df, -B1, --output=avail, "{{ ansible_facts.user_dir }}/halogen-models"]
+          register: model_space
+          changed_when: false
+
+        - name: Reserve room for missing model data and the 64 GiB cache
+          ansible.builtin.assert:
+            that:
+              - model_space.stdout_lines[-1] | int >= 204010946560
+            fail_msg: Allow 190 GiB free before downloading weights, including space for the cache.
+
+        - name: See whether a Halogen unit already exists
+          ansible.builtin.command: systemctl --user show halogen.service --property=LoadState --value
+          environment:
+            XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.user_uid }}"
+          register: existing_unit
+          changed_when: false
+          failed_when: existing_unit.rc not in [0, 1]
+
+        - name: Stop an existing service before writing its model files
+          ansible.builtin.systemd_service:
+            name: halogen.service
+            scope: user
+            state: stopped
+          environment:
+            XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.user_uid }}"
+          when: existing_unit.stdout == 'loaded'
+
+        - name: Fetch only the pinned Flash model, vision tower and tokenizer
+          ansible.builtin.command:
+            argv: >-
+              {{ ['podman', 'run', '--rm', '--entrypoint', 'hf',
+                  '--env', 'HF_HUB_OFFLINE=0',
+                  '--volume', ansible_facts.user_dir + '/halogen-models:/models',
+                  halogen_image, 'download', halogen_model_repo]
+                  + (halogen_model_files | map(attribute='name') | list)
+                  + ['--revision', halogen_model_revision, '--local-dir', '/models'] }}
+          async: 14400
+          poll: 30
+          changed_when: true
+
+        - name: Confirm every downloaded file has its published size
+          ansible.builtin.stat:
+            path: "{{ ansible_facts.user_dir }}/halogen-models/{{ item.name }}"
+            get_checksum: false
+            get_mime: false
+          loop: "{{ halogen_model_files }}"
+          loop_control:
+            label: "{{ item.name }}"
+          register: downloaded_files
+          failed_when: downloaded_files.stat.size | default(0) != item.size
+
+        - name: Record a completed model download
+          ansible.builtin.copy:
+            dest: "{{ ansible_facts.user_dir }}/halogen-models/.halogen-model-revision"
+            content: "{{ halogen_model_revision }}\n"
+            mode: "0600"
+
+    - name: Install the user Quadlet
+      ansible.builtin.template:
+        src: templates/halogen.container.j2
+        dest: "{{ ansible_facts.user_dir }}/.config/containers/systemd/halogen.container"
+        mode: "0644"
+      register: quadlet
+
+    - name: Regenerate the user systemd units and start Halogen
+      ansible.builtin.systemd_service:
+        name: halogen.service
+        scope: user
+        daemon_reload: true
+        state: >-
+          {{ 'restarted' if quadlet.changed
+             or (previous_health.json | default({})).get('version', {}).get('engine') != halogen_version
+             or (previous_health.json | default({})).get('version', {}).get('api') != halogen_version
+             else 'started' }}
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.user_uid }}"
+      when: not ansible_check_mode
+
+    - name: Verify startup
+      ansible.builtin.import_tasks: tasks/health.yml

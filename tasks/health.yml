@@ -1,0 +1,29 @@
+---
+- name: Wait for both the API and engine to answer
+  ansible.builtin.uri:
+    url: "http://{{ halogen_lan_ip | default(ansible_facts.default_ipv4.address) }}:8731/health"
+    return_content: true
+    use_proxy: false
+    timeout: 10
+  register: halogen_health
+  until: >-
+    halogen_health.status == 200
+    and (halogen_health.json | default({})).get('status') == 'ok'
+    and (halogen_health.json | default({})).get('engine', {}).get('responds', false)
+  retries: 90
+  delay: 10
+  when: not ansible_check_mode
+
+- name: Confirm the expected build and capacity
+  ansible.builtin.assert:
+    that:
+      - halogen_health.json.version.api == halogen_version
+      - halogen_health.json.version.engine == halogen_version
+      - halogen_health.json.version.match
+      - halogen_health.json.context == 262144
+      - halogen_health.json.kv_pool_positions == 786432
+      - halogen_health.json.slots == 4
+      - halogen_health.json.vision.enabled
+      - halogen_health.json.server_defaults.HALOGEN_MAX_TOKENS_DEFAULT == 32768
+      - halogen_health.json.server_defaults.HALOGEN_MAX_THINKING_TOKENS == 16384
+  when: not ansible_check_mode
