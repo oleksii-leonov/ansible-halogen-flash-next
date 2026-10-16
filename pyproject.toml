@@ -1,6 +1,7 @@
 [project]
 name = "ansible-halogen"
 version = "0.1.0"
+license = "MIT"
 requires-python = ">=3.12,<3.15"
 dependencies = ["ansible-core==2.20.10"]
 

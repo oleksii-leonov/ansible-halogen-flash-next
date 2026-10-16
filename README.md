@@ -145,3 +145,7 @@ with synthetic data. It executes no returned tools and is not a load benchmark.
 - [Halogen memory locking and host requirements](https://github.com/peonist-ai/halogen-flash-server/blob/main/docs/host-setup.md)
 - [Podman Quadlet lifecycle and rootless units](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html)
 - [Official Tailscale Ubuntu packages](https://pkgs.tailscale.com/stable/#ubuntu-resolute)
+
+## License
+
+[MIT](LICENSE), copyright 2026 Oleksii Leonov.
