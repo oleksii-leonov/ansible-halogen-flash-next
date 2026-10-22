@@ -1,6 +1,6 @@
 ---
-halogen_version: "0.18.5"
-halogen_image: ghcr.io/peonist-ai/halogen-flash-server@sha256:94c9d76b6b938459e00805c61978808957703745fe573ca2d7f01e9157446b3d
+halogen_version: "0.18.14"
+halogen_image: ghcr.io/peonist-ai/halogen-flash-server@sha256:e0c1d1b48e07c8acdd204fbdbafbb421a395a73cf704271845a1846ad1fd767f
 halogen_model_repo: peonist-ai/halogen-qwen3.8-flash-next
 halogen_model_revision: 6e1aa1acda75bd8a3bb9043b1545f83187cb6ded
 # Exact files and published sizes for the pinned Hugging Face revision.
