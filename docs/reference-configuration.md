@@ -1,9 +1,10 @@
 # Reference configuration
 
-This baseline was derived from inspection of a working Framework Desktop running
-Halogen 0.18.5 on **2026-10-16**. Hostnames, accounts and network addresses are
-configured separately for each machine. See the validation boundary below for
-what has been tested.
+The host baseline was derived from inspection of a working Framework Desktop
+running Halogen 0.18.5 on **2026-10-16**. The deployment now pins **0.18.14**, the
+latest image verified in the registry on **2026-10-22**. Hostnames, accounts and
+network addresses are configured separately for each machine. See the validation
+boundary below for what has been tested.
 
 ## Hardware and operating system
 
@@ -100,10 +101,12 @@ rules are managed separately. Tailscale rules do not restrict access through the
 
 Source: `~/.config/containers/systemd/halogen.container`, owned by the SSH user.
 Runtime: user `halogen.service`, container `systemd-halogen`, one image serving
-both engine and API. Version 0.18.5 was healthy with matching API and engine builds.
+both engine and API at version **0.18.14**. The health check requires both builds
+to match this version.
 
-Image digest: `sha256:94c9d76b6b938459e00805c61978808957703745fe573ca2d7f01e9157446b3d`.
-The playbook pins this verified digest rather than a mutable image tag.
+Image digest: `sha256:e0c1d1b48e07c8acdd204fbdbafbb421a395a73cf704271845a1846ad1fd767f`.
+The registry's `0.18.14` and `latest` tags resolved to this digest on 2026-10-22;
+the playbook pins the digest rather than either mutable tag.
 
 Weights: `peonist-ai/halogen-qwen3.8-flash-next`, revision
 `6e1aa1acda75bd8a3bb9043b1545f83187cb6ded`, confirmed against the public manifest.
@@ -112,6 +115,11 @@ files are v2 weights (66,687,678,432 bytes), lookup table (51,200,246,144 bytes)
 and vision tower (897,916,416 bytes). Six tokenizer files accompany them.
 Deployment verifies file sizes and records the revision; it does not recompute
 full weight checksums.
+
+The [upstream changelog](https://github.com/peonist-ai/halogen-flash-server/blob/main/CHANGELOG.md#01814)
+reports unchanged Flash checkpoints throughout 0.18.6–0.18.14. This deployment
+retains its model and tokenizer revision, so upgrading from 0.18.5 reuses a
+complete existing download.
 
 The generated unit uses `/dev/kfd`, `/dev/dri`, host IPC, unlimited
 memlock, read-only `~/halogen-models:/models`, and writable `~/halogen-cache:/cache`.
@@ -135,6 +143,25 @@ Image defaults supply 262,144 context per request, four generating slots,
 The pool accommodates three full contexts or more shorter conversations.
 No NPU models, request records or runtime model downloads are enabled.
 
+The image retains the scheduling defaults introduced in 0.18.13 without extra
+Quadlet settings:
+
+- `HALOGEN_ADMIT_SPLICE_MS=500` and `HALOGEN_ADMIT_SPLICE_FOR=all` keep streaming
+  replies progressing while another request's long prompt is processed.
+- `HALOGEN_ADMIT_NEST=1` and `HALOGEN_ADMIT_NEST_MAX=1024` let a short text request
+  with up to 1,024 uncached tokens start during that processing. This reserves
+  approximately 0.33 GiB more pinned host memory and 32 MiB of device memory.
+
+These defaults trade a little longer processing of the long prompt for more
+responsive concurrent requests.
+
+Version 0.18.14 adds `HALOGEN_POOL_GROW=2` by default. A long reply whose token
+budget was reduced to fit the KV pool can claim free space or reclaim the oldest
+idle cached conversations, moving its region if needed, up to the requested
+budget. This avoids stopping early when cache space can be reclaimed. See the upstream
+[settings reference](https://github.com/peonist-ai/halogen-flash-server/blob/main/docs/FLAGS.md)
+for limitations and overrides.
+
 The unit restarts on failure after 30 seconds, allows 900 seconds for startup,
 and gives Podman 60 seconds to stop within a 90-second systemd stop timeout.
 `WantedBy=default.target` and lingering start it at boot. Memory locking is scoped
@@ -143,7 +170,7 @@ the 30-second failure retry handles addresses appearing late.
 
 ## Validation boundary
 
-Validation completed on 2026-10-16:
+Validation below was completed on 2026-10-16 with **0.18.5**:
 
 - Three offline tests passed: per-host bindings and image pinning, preservation of
   existing boot arguments without duplicates, and model manifest path constraints.
@@ -156,6 +183,10 @@ Validation completed on 2026-10-16:
   with `hf download --dry-run`, reporting 118.8 GB, without downloading weights.
 - `verify.yml` passed against the live 0.18.5 server: health, matching builds,
   capacity, streaming, strict tool arguments, concurrent requests and vision.
+
+For the 0.18.14 update, all three offline tests and all three Ansible syntax
+checks passed on 2026-10-22. Live deployment and inference checks have not been
+rerun for this version.
 
 A full installation on a blank machine, a second real provisioning run
 to measure idempotence, and performance/load benchmarks remain untested.
