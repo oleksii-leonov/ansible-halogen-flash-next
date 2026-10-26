@@ -1,8 +1,8 @@
 # Reference configuration
 
 The host baseline was derived from inspection of a working Framework Desktop
-running Halogen 0.18.5 on **2026-10-16**. The deployment now pins **0.18.14**, the
-latest image verified in the registry on **2026-10-22**. Hostnames, accounts and
+running Halogen 0.18.5 on **2026-10-16**. The deployment now pins **0.18.16**, the
+latest image verified in the registry on **2026-10-26**. Hostnames, accounts and
 network addresses are configured separately for each machine. See the validation
 boundary below for what has been tested.
 
@@ -101,11 +101,11 @@ rules are managed separately. Tailscale rules do not restrict access through the
 
 Source: `~/.config/containers/systemd/halogen.container`, owned by the SSH user.
 Runtime: user `halogen.service`, container `systemd-halogen`, one image serving
-both engine and API at version **0.18.14**. The health check requires both builds
+both engine and API at version **0.18.16**. The health check requires both builds
 to match this version.
 
-Image digest: `sha256:e0c1d1b48e07c8acdd204fbdbafbb421a395a73cf704271845a1846ad1fd767f`.
-The registry's `0.18.14` and `latest` tags resolved to this digest on 2026-10-22;
+Image digest: `sha256:fee7d5bb7ff02c78c60224da931e3c70a160dc48779bf5f7ba1030c97c8ac2d1`.
+The registry's `0.18.16` and `latest` tags resolved to this digest on 2026-10-26;
 the playbook pins the digest rather than either mutable tag.
 
 Weights: `peonist-ai/halogen-qwen3.8-flash-next`, revision
@@ -116,8 +116,8 @@ and vision tower (897,916,416 bytes). Six tokenizer files accompany them.
 Deployment verifies file sizes and records the revision; it does not recompute
 full weight checksums.
 
-The [upstream changelog](https://github.com/peonist-ai/halogen-flash-server/blob/main/CHANGELOG.md#01814)
-reports unchanged Flash checkpoints throughout 0.18.6–0.18.14. This deployment
+The [upstream changelog](https://github.com/peonist-ai/halogen-flash-server/blob/main/CHANGELOG.md#01816)
+reports unchanged Flash checkpoints throughout 0.18.6–0.18.16. This deployment
 retains its model and tokenizer revision, so upgrading from 0.18.5 reuses a
 complete existing download.
 
@@ -143,6 +143,10 @@ Image defaults supply 262,144 context per request, four generating slots,
 The pool accommodates three full contexts or more shorter conversations.
 No NPU models, request records or runtime model downloads are enabled.
 
+The eight-full-context configuration introduced in 0.18.15 remains opt-in and
+is not enabled here. It requires an 8-bit KV cache, eight slots, a 2,097,152-position
+pool and a 16,384-token prefill chunk size, leaving little spare host memory.
+
 The image retains the scheduling defaults introduced in 0.18.13 without extra
 Quadlet settings:
 
@@ -161,6 +165,12 @@ idle cached conversations, moving its region if needed, up to the requested
 budget. This avoids stopping early when cache space can be reclaimed. See the upstream
 [settings reference](https://github.com/peonist-ai/halogen-flash-server/blob/main/docs/FLAGS.md)
 for limitations and overrides.
+
+Version 0.18.16 disables the automatic reply-end keep introduced in 0.18.15,
+which could stall requests, and fixes preservation of kept replies when the
+pool moves a conversation. It also restores generation speed with drafting.
+The 0.18.15 fixes for disconnected queued clients, premature answer endings
+and forced tool calls exhausting their token budget are retained.
 
 The unit restarts on failure after 30 seconds, allows 900 seconds for startup,
 and gives Podman 60 seconds to stop within a 90-second systemd stop timeout.
@@ -184,8 +194,8 @@ Validation below was completed on 2026-10-16 with **0.18.5**:
 - `verify.yml` passed against the live 0.18.5 server: health, matching builds,
   capacity, streaming, strict tool arguments, concurrent requests and vision.
 
-For the 0.18.14 update, all three offline tests and all three Ansible syntax
-checks passed on 2026-10-22. Live deployment and inference checks have not been
+For the 0.18.16 update, all three offline tests and all three Ansible syntax
+checks passed on 2026-10-26. Live deployment and inference checks have not been
 rerun for this version.
 
 A full installation on a blank machine, a second real provisioning run

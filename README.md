@@ -5,7 +5,7 @@ and native Ubuntu 26.04**. The [reference configuration](docs/reference-configur
 documents the tested hardware, kernel, GPU memory settings, packages and service.
 
 This project has two provisioning playbooks, a verification playbook, one Quadlet,
-and no external Ansible collections. It pins Halogen **0.18.14 by image digest**,
+and no external Ansible collections. It pins Halogen **0.18.16 by image digest**,
 and pins the Flash v2 model and tokenizer by Hugging Face commit. Ubuntu and Tailscale packages
 come from their supported repositories; their versions are recorded, not frozen.
 
@@ -123,13 +123,13 @@ upgrade; the initial idle check does not prevent new requests from arriving.
 Old build caches are pruned (`HALOGEN_CACHE_PRUNE_OLD=1`); first requests after an
 upgrade may have to process their full prompts again. No rollback automation.
 
-The current pin is **0.18.14**, confirmed against the registry's `latest` tag on
-2026-10-22. Upgrading from this repo's 0.18.5 baseline keeps the same pinned Flash
+The current pin is **0.18.16**, confirmed against the registry's `latest` tag on
+2026-10-26. Upgrading from this repo's 0.18.5 baseline keeps the same pinned Flash
 v2 weights and tokenizer; a complete existing download is reused. Stop client
 traffic, then run the `deploy.yml` and `verify.yml` commands above. See the
 [reference configuration](docs/reference-configuration.md#model-and-service)
 for the new scheduling and cache defaults and the
-[upstream changelog](https://github.com/peonist-ai/halogen-flash-server/blob/main/CHANGELOG.md#01814)
+[upstream changelog](https://github.com/peonist-ai/halogen-flash-server/blob/main/CHANGELOG.md#01816)
 for release details.
 
 ## Check changes
